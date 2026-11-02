@@ -18,7 +18,95 @@
 #include <direct.h>
 #elif defined(_WIN32)
 #include <io.h>
+#include <direct.h>
 #endif
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <stdint.h>
+#elif defined(__linux__)
+#include <unistd.h>
+#endif
+
+#define EXE_PATH_MAX 4096
+
+/* The folder holding the running program, or NULL if it cannot be found.
+ * A csolrc there, with its games and themes, serves as the system
+ * configuration when none is installed: av installs a title in a folder
+ * of its own, run from anywhere. */
+static char *program_dir(void) {
+  char *path = malloc(EXE_PATH_MAX);
+  char *dir, *path_dir;
+  int ok = 0;
+#if defined(_WIN32)
+  DWORD n = GetModuleFileNameA(NULL, path, EXE_PATH_MAX);
+  ok = n > 0 && n < EXE_PATH_MAX;
+#elif defined(__APPLE__)
+  char raw[EXE_PATH_MAX];
+  uint32_t size = sizeof raw;
+  ok = _NSGetExecutablePath(raw, &size) == 0 && realpath(raw, path) != NULL;
+#elif defined(__linux__)
+  ssize_t n = readlink("/proc/self/exe", path, EXE_PATH_MAX - 1);
+  if (n > 0) {
+    path[n] = '\0';
+    ok = 1;
+  }
+#endif
+  if (!ok) {
+    free(path);
+    return NULL;
+  }
+  path_dir = dirname(path);
+  dir = malloc(strlen(path_dir) + 1);
+  strcpy(dir, path_dir);
+  free(path);
+  return dir;
+}
+
+static char *beside_program(const char *name) {
+  char *dir = program_dir();
+  char *path;
+  if (!dir) {
+    return NULL;
+  }
+  path = combine_paths(dir, name);
+  free(dir);
+  if (file_exists(path)) {
+    return path;
+  }
+  free(path);
+  return NULL;
+}
+
+/* Where the user's own configuration file goes: $XDG_CONFIG_HOME/csol or
+ * ~/.config/csol, and %APPDATA%\csol on Windows. NULL if neither is set. */
+char *find_user_config_file(const char *name) {
+  char *dir, *path;
+#ifdef USE_XDG_PATHS
+  char *base = getenv("XDG_CONFIG_HOME");
+  if (base) {
+    dir = combine_paths(base, "csol");
+  } else {
+    base = getenv("HOME");
+    if (!base) {
+      return NULL;
+    }
+    dir = combine_paths(base, ".config/csol");
+  }
+#elif defined(_WIN32)
+  char *base = getenv("APPDATA");
+  if (!base) {
+    return NULL;
+  }
+  dir = combine_paths(base, "csol");
+#else
+  return NULL;
+#endif
+  path = combine_paths(dir, name);
+  free(dir);
+  return path;
+}
 
 int file_exists(const char *path) {
   FILE *f = fopen(path, "r");
@@ -64,7 +152,21 @@ char *find_data_file(const char *name, const char *arg0) {
       }
     }
 #else
-  char *copy = strdup(arg0);
+  char *copy;
+#if defined(_WIN32)
+  char *app_data = getenv("APPDATA");
+  if (app_data) {
+    char *combined_data_dir = combine_paths(app_data, "csol");
+    if (mkdir_rec(combined_data_dir)) {
+      path = combine_paths(combined_data_dir, name);
+    }
+    free(combined_data_dir);
+    if (path) {
+      return path;
+    }
+  }
+#endif
+  copy = strdup(arg0);
   path = combine_paths(dirname(copy), name);
   free(copy);
 #endif
@@ -113,7 +215,11 @@ char *find_system_config_file(const char *name) {
     }
   }
 #endif
+#ifndef MSDOS
+  return beside_program(name);
+#else
   return NULL;
+#endif
 }
 
 static int check_dir(const char *path) {
@@ -142,7 +248,11 @@ int mkdir_rec(const char *path) {
   if (buffer[length - 1] == PATH_SEP) {
     buffer[length - 1] = 0;
   }
-  for (p = buffer + 1; *p; p++) {
+  p = buffer + 1;
+  if (buffer[0] && buffer[1] == ':' && buffer[2] == PATH_SEP) {
+    p = buffer + 3; /* a drive (C:\) is there already, and cannot be made */
+  }
+  for (; *p; p++) {
     if (*p == PATH_SEP) {
       *p = 0;
       if (!check_dir(buffer)) {

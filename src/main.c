@@ -56,17 +56,7 @@ static void describe_option(const char *short_option, const char *long_option, c
 
 static char *find_csolrc() {
   FILE *f;
-#ifdef USE_XDG_PATHS
-  char *config_dir = getenv("XDG_CONFIG_HOME");
-  char *config_file = NULL;
-  if (config_dir) {
-    config_file = user_rc_path = combine_paths(config_dir, "csol/csolrc");
-  } else {
-    config_dir = getenv("HOME");
-    if (config_dir) {
-      config_file = user_rc_path = combine_paths(config_dir, ".config/csol/csolrc");
-    }
-  }
+  char *config_file = user_rc_path = find_user_config_file("csolrc");
   if (config_file) {
     f = fopen(config_file, "r");
     if (f) {
@@ -74,11 +64,12 @@ static char *find_csolrc() {
       return strdup(config_file);
     }
   }
+  /* the installed one, or the one beside the program; saving settings
+   * then writes the user's file above, which includes it */
   config_file = find_system_config_file("csolrc");
   if (config_file) {
     return config_file;
   }
-#endif
   f = fopen("csolrc", "r");
   if (f) {
     fclose(f);
