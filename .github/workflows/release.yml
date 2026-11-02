@@ -1,0 +1,176 @@
+# Builds csol for the Asciiverse catalog and as system packages.
+#
+# For av: one archive per target, named <id>-<target>.tar.gz (.zip on
+# Windows), plus a SHA256SUMS file, attached to a GitHub release
+# (hub/catalog/SCHEMA.md, release.source = "github"). Each archive holds the
+# program with its csolrc, games/ and themes/ beside it, where csol finds
+# them when no system configuration is installed.
+# For everyone else: .deb, .rpm, .apk and Arch packages from the same static
+# Linux binaries, made by nfpm (asciiverse/nfpm.yaml), with the
+# configuration in /etc/xdg/csol as upstream's CMake installs it.
+#
+# Tags look like v1.6.0+20250719-av.1: upstream's version and the date of
+# the upstream commit (past the release), then our packaging release.
+# Linux builds run in Alpine, so the binaries are static (ncursesw, musl).
+# macOS uses its own ncurses; _DARWIN_C_SOURCE keeps strdup and friends
+# visible beside the code's _XOPEN_SOURCE. Windows is cross-compiled with
+# MinGW against PDCurses, upstream's own Windows setup (win/), with its
+# csolrc and the cp437 theme.
+
+name: release
+
+on:
+  push:
+    tags: ["v*-av.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to build and release"
+        required: true
+
+env:
+  ID: csol
+  TAG: ${{ inputs.tag || github.ref_name }}
+  PDCURSES_VERSION: "3.9"
+  CFLAGS: -O2 -std=c89 -Wall -pedantic -DUSE_GETOPT
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, runner: ubuntu-24.04, arch: amd64 }
+          - { target: aarch64-unknown-linux-musl, runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build
+        run: |
+          mkdir -p out
+          docker run --rm -v "$PWD":/src -w /src -e CFLAGS alpine:3.22 sh -c '
+            apk add --no-cache build-base ncurses-dev ncurses-static &&
+            cc $CFLAGS src/*.c -static -lncursesw -o out/csol &&
+            strip out/csol'
+          sudo chown -R "$(id -u):$(id -g)" out
+          file out/csol
+
+      - name: Package for av
+        run: |
+          # the program sits at the top of the archive, where av looks for it
+          rm -rf stage && mkdir -p stage dist
+          cp -r out/csol csolrc games themes doc/csol.6 LICENSE README.md stage/
+          tar -czf "dist/$ID-${{ matrix.target }}.tar.gz" -C stage .
+
+      - name: System packages
+        run: |
+          v="${TAG#v}"; export VERSION="${v%%-av.*}" RELEASE="${TAG##*-av.}" ARCH="${{ matrix.arch }}"
+          for p in deb rpm apk archlinux; do
+            docker run --rm -u "$(id -u):$(id -g)" -v "$PWD":/src -w /src \
+              -e VERSION -e RELEASE -e ARCH goreleaser/nfpm:v2.43.0 \
+              package --config asciiverse/nfpm.yaml --packager "$p" --target dist/
+          done
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-apple-darwin, arch: x86_64 }
+          - { target: aarch64-apple-darwin, arch: arm64 }
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build
+        run: |
+          mkdir -p out
+          cc $CFLAGS -D_DARWIN_C_SOURCE -arch ${{ matrix.arch }} src/*.c -lncurses -o out/csol
+          strip out/csol
+          file out/csol
+
+      - name: Package
+        run: |
+          rm -rf stage && mkdir -p stage dist
+          cp -r out/csol csolrc games themes doc/csol.6 LICENSE README.md stage/
+          tar -czf "dist/$ID-${{ matrix.target }}.tar.gz" -C stage .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  windows:
+    runs-on: ubuntu-24.04
+    env:
+      TARGET: x86_64-pc-windows-gnu
+      CROSS: x86_64-w64-mingw32
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Build PDCurses
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 zip
+          curl -sSfL "https://github.com/wmcbrine/PDCurses/archive/refs/tags/$PDCURSES_VERSION.tar.gz" | tar xz -C "$RUNNER_TEMP"
+          make -C "$RUNNER_TEMP/PDCurses-$PDCURSES_VERSION/wincon" CC=$CROSS-gcc AR=$CROSS-ar pdcurses.a
+
+      - name: Build
+        run: |
+          PDC="$RUNNER_TEMP/PDCurses-$PDCURSES_VERSION"
+          mkdir -p out
+          $CROSS-gcc -O2 -Wall -pedantic -DUSE_PDCURSES -DUSE_GETOPT -DPDC_NCMOUSE -I"$PDC" \
+            src/*.c "$PDC/wincon/pdcurses.a" -static -s -o out/csol.exe
+          file out/csol.exe
+
+      - name: Package
+        run: |
+          rm -rf stage && mkdir -p stage dist
+          cp -r out/csol.exe games themes LICENSE README.md stage/
+          cp asciiverse/csolrc-windows stage/csolrc
+          (cd stage && zip -qr "../dist/$ID-$TARGET.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TARGET }}
+          path: dist/*
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "csol $TAG" \
+                 --notes "csol ${TAG%%-av.*} from github.com/nielssp/csol, built for the Asciiverse catalog, with .deb, .rpm, .apk and Arch packages. Changes from upstream: see PATCHES.md."
+          gh release upload "$TAG" dist/* -R "$GITHUB_REPOSITORY" --clobber

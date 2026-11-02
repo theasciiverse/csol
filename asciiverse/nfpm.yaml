@@ -1,0 +1,49 @@
+# System packages (.deb, .rpm, .apk, Arch) for csol, built by nfpm from the
+# same static binary as the av archive. The release workflow sets VERSION
+# (upstream's, with the upstream commit's date as semver metadata, e.g.
+# 1.6.0+20250719; nfpm writes that part the way each format wants it),
+# RELEASE (our packaging release) and ARCH (amd64 or arm64), and builds the
+# binary at out/csol. The configuration, games and themes go to
+# /etc/xdg/csol, where upstream's CMake installs them and csol looks first.
+#
+# No .desktop file on purpose: av is the one place titles are started from,
+# so Asciiverse packages never add menu entries (asciiverse/CLAUDE.md).
+name: csol
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: ${RELEASE}
+section: games
+priority: optional
+maintainer: Asciiverse <packages@asciiverse.sh>
+vendor: Asciiverse
+homepage: https://github.com/theasciiverse/csol
+license: MIT
+description: |
+  Eleven solitaire games for the terminal.
+  Klondike, FreeCell, Spider in one, two or four suits, Yukon, Russian,
+  Eight Off, Golf and more, with themes, undo and the mouse. By Niels
+  Sonnich Poulsen, packaged by Asciiverse.
+contents:
+  - src: out/csol
+    dst: /usr/bin/csol
+    file_info: { mode: 0755 }
+  - src: csolrc
+    dst: /etc/xdg/csol/csolrc
+    type: config
+    file_info: { mode: 0644 }
+  - src: games/
+    dst: /etc/xdg/csol/games
+    file_info: { mode: 0644 }
+  - src: themes/
+    dst: /etc/xdg/csol/themes
+    file_info: { mode: 0644 }
+  - src: doc/csol.6
+    dst: /usr/share/man/man6/csol.6
+    file_info: { mode: 0644 }
+  - src: LICENSE
+    dst: /usr/share/doc/csol/copyright
+    file_info: { mode: 0644 }
+  - src: README.md
+    dst: /usr/share/doc/csol/README.md
+    file_info: { mode: 0644 }
