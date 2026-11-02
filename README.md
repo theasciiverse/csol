@@ -1,3 +1,13 @@
+> **Play it with Asciiverse.** With [av](https://asciiverse.sh), the Asciiverse
+> client:
+>
+> ```
+> av install csol
+> av play csol
+> ```
+>
+> The original README follows.
+
 # csol
 
 A small collection of solitaire games implemented in C using ncurses.
